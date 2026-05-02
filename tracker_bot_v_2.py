@@ -50,26 +50,8 @@ def hours_kb():
     m.row('🔙 Назад')
     return m
 
-@bot.message_handler(commands=['start','month','top','reset','export','goal','graph','pomodoro','leaderboard'])
+@bot.message_handler(commands=['start'])
 def start(msg):
-    if msg.text.startswith('/month'):
-        report_month(msg.chat.id); return
-    if msg.text.startswith('/top'):
-        project_stats(msg.chat.id); return
-    if msg.text.startswith('/reset'):
-        reset_logs(msg.chat.id); return
-    if msg.text.startswith('/export'):
-        export_logs(msg.chat.id); return
-    if msg.text.startswith('/goal'):
-        parts=msg.text.split()
-        if len(parts)>1:
-            set_goal(msg.chat.id, parts[1]); return
-    if msg.text.startswith('/graph'):
-        report_month(msg.chat.id); return
-    if msg.text.startswith('/pomodoro'):
-        bot.send_message(msg.chat.id,'🍅 Таймер запущен. Вернусь через 25 минут (demo).'); return
-    if msg.text.startswith('/leaderboard'):
-        leaderboard(msg.chat.id); return
     uid=msg.chat.id
     with conn() as c:
         c.execute('INSERT OR IGNORE INTO users(user_id,name) VALUES(?,?)',(uid,msg.from_user.first_name))
@@ -177,50 +159,6 @@ def project_stats(uid):
     if not rows:
         bot.send_message(uid,'Нет данных'); return
     txt='📁 Проекты:\n'+'\n'.join([f'{p}: {h:.1f}ч' for p,h in rows])
-    bot.send_message(uid,txt)
-
-def report_month(uid):
-    since=(datetime.now()-timedelta(days=30)).strftime('%Y-%m-%d')
-    with conn() as c:
-        val=c.execute('SELECT COALESCE(SUM(hours),0) FROM logs WHERE user_id=? AND date>=?',(uid,since)).fetchone()[0]
-    bot.send_message(uid,f'📅 За 30 дней: {val:.1f}ч')
-
-def reset_logs(uid):
-    with conn() as c:
-        c.execute('DELETE FROM logs WHERE user_id=?',(uid,))
-    bot.send_message(uid,'🗑 Данные очищены')
-
-def export_logs(uid):
-    with conn() as c:
-        rows = c.execute(
-            'SELECT date, project, hours FROM logs WHERE user_id=? ORDER BY date DESC',
-            (uid,)
-        ).fetchall()
-
-    txt = "date,project,hours\n"
-
-    for row in rows:
-        txt += f"{row[0]},{row[1]},{row[2]}\n"
-
-    bot.send_document(
-        uid,
-        ('export.csv', txt.encode('utf-8'))
-    )
-def set_goal(uid,val):
-    try:
-        g=float(val)
-        with conn() as c:
-            c.execute('UPDATE users SET goal=? WHERE user_id=?',(g,uid))
-        bot.send_message(uid,f'🎯 Цель обновлена: {g}ч')
-    except:
-        bot.send_message(uid,'Используй: /goal 8')
-
-def leaderboard(uid):
-    with conn() as c:
-        rows=c.execute('SELECT name, COALESCE((SELECT SUM(hours) FROM logs l WHERE l.user_id=u.user_id),0) total FROM users u ORDER BY total DESC LIMIT 10').fetchall()
-    txt='🏆 Leaderboard
-'+'
-'.join([f'{i+1}. {n}: {t:.1f}ч' for i,(n,t) in enumerate(rows)])
     bot.send_message(uid,txt)
 
 def daily_push():
