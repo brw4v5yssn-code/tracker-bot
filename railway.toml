@@ -1,2 +1,2 @@
 [deploy]
-start = tracker_bot_v_2.py
+startCommand = "python tracker_bot_v_2.py"
