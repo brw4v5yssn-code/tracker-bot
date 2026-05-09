@@ -1,4 +1,0 @@
-pytelegrambotapi
-apscheduler
-python-dotenv
-pyTelegramBotAPI
