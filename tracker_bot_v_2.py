@@ -2,7 +2,6 @@ import telebot
 from telebot import types
 import sqlite3
 from datetime import datetime
-import os
 import time
 
 # ======================
@@ -12,10 +11,10 @@ import time
 TOKEN = "8696665559:AAHoFXlywG_YNpDBE68ePeoiH-n8lsnBD_4"
 ADMIN_IDS = [1427099343]
 
-bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
+bot = telebot.TeleBot(TOKEN)
 
 # ======================
-# 📦 DB (STABLE MODE)
+# 📦 DB
 # ======================
 
 conn = sqlite3.connect("bot.db", check_same_thread=False)
@@ -30,33 +29,12 @@ CREATE TABLE IF NOT EXISTS users (
     banned INTEGER DEFAULT 0
 )
 """)
+
 conn.commit()
 
 # ======================
-# 🧠 CACHE (ANTI SPAM)
+# 🧠 HELPERS
 # ======================
-
-last_msg_time = {}
-
-def anti_spam(user_id):
-    now = time.time()
-    if user_id in last_msg_time:
-        if now - last_msg_time[user_id] < 0.3:
-            return True
-    last_msg_time[user_id] = now
-    return False
-
-# ======================
-# 🔐 HELPERS
-# ======================
-
-def is_admin(uid):
-    return uid in ADMIN_IDS
-
-def is_banned(uid):
-    cursor.execute("SELECT banned FROM users WHERE id=?", (uid,))
-    r = cursor.fetchone()
-    return r and r[0] == 1
 
 def add_user(uid, username):
     cursor.execute("SELECT id FROM users WHERE id=?", (uid,))
@@ -67,29 +45,25 @@ def add_user(uid, username):
         )
         conn.commit()
 
-def inc_msg(uid):
+def inc(uid):
     cursor.execute(
         "UPDATE users SET messages_count = messages_count + 1 WHERE id=?",
         (uid,)
     )
     conn.commit()
 
+def is_admin(uid):
+    return uid in ADMIN_IDS
+
 # ======================
-# 🔧 ADMIN PANEL
+# 🎮 MAIN MENU
 # ======================
 
-def menu():
-    kb = types.InlineKeyboardMarkup(row_width=2)
+def main_menu():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
 
-    kb.add(
-        types.InlineKeyboardButton("📊 Стата", callback_data="stats"),
-        types.InlineKeyboardButton("👥 Юзеры", callback_data="users")
-    )
-
-    kb.add(
-        types.InlineKeyboardButton("🚫 Бан", callback_data="ban"),
-        types.InlineKeyboardButton("📢 Рассылка", callback_data="broadcast")
-    )
+    kb.row("📊 Статус", "👤 Профиль")
+    kb.row("ℹ️ Помощь", "💬 Написать боту")
 
     return kb
 
@@ -99,29 +73,82 @@ def menu():
 
 @bot.message_handler(commands=['start'])
 def start(m):
-    if anti_spam(m.from_user.id):
-        return
-
-    if is_banned(m.from_user.id):
-        return
-
     add_user(m.from_user.id, m.from_user.username)
-    bot.send_message(m.chat.id, "👋 Бот работает")
+    inc(m.from_user.id)
+
+    bot.send_message(
+        m.chat.id,
+        "👋 Привет! Я живой бот.\nВыбери действие ниже 👇",
+        reply_markup=main_menu()
+    )
 
 # ======================
-# 📩 ALL MSGS
+# 💬 PROFILE
+# ======================
+
+@bot.message_handler(func=lambda m: m.text == "👤 Профиль")
+def profile(m):
+    cursor.execute("SELECT messages_count, first_seen FROM users WHERE id=?",
+                   (m.from_user.id,))
+    data = cursor.fetchone()
+
+    if not data:
+        bot.send_message(m.chat.id, "Нет данных")
+        return
+
+    bot.send_message(
+        m.chat.id,
+        f"👤 Твой профиль\n\n💬 Сообщений: {data[0]}\n📅 С нами с: {data[1]}"
+    )
+
+# ======================
+# 📊 STATUS
+# ======================
+
+@bot.message_handler(func=lambda m: m.text == "📊 Статус")
+def status(m):
+    bot.send_message(m.chat.id, "✅ Бот работает нормально и живой")
+
+# ======================
+# ℹ️ HELP
+# ======================
+
+@bot.message_handler(func=lambda m: m.text == "ℹ️ Помощь")
+def help(m):
+    bot.send_message(
+        m.chat.id,
+        "🧠 Команды:\n\n"
+        "📊 Статус — проверка работы\n"
+        "👤 Профиль — твоя статистика\n"
+        "💬 Написать боту — просто напиши сообщение"
+    )
+
+# ======================
+# 💬 ECHO + AI STYLE
 # ======================
 
 @bot.message_handler(func=lambda m: True)
-def all(m):
-    if anti_spam(m.from_user.id):
-        return
-
-    if is_banned(m.from_user.id):
-        return
-
+def all_messages(m):
     add_user(m.from_user.id, m.from_user.username)
-    inc_msg(m.from_user.id)
+    inc(m.from_user.id)
+
+    text = m.text.lower()
+
+    # простые реакции (делают бота "живым")
+    if "привет" in text:
+        bot.send_message(m.chat.id, "👋 Привет!")
+        return
+
+    if "как дела" in text:
+        bot.send_message(m.chat.id, "🤖 Я работаю стабильно")
+        return
+
+    if "бот" in text:
+        bot.send_message(m.chat.id, "🤖 Да, я здесь")
+        return
+
+    # fallback
+    bot.send_message(m.chat.id, f"💬 Ты написал: {m.text}")
 
 # ======================
 # 🔧 ADMIN
@@ -130,110 +157,15 @@ def all(m):
 @bot.message_handler(commands=['admin'])
 def admin(m):
     if not is_admin(m.from_user.id):
-        return bot.send_message(m.chat.id, "⛔ Нет доступа")
+        return
 
-    bot.send_message(m.chat.id, "🔧 Админка", reply_markup=menu())
-
-# ======================
-# 📊 STATS
-# ======================
-
-def stats():
-    cursor.execute("SELECT COUNT(*) FROM users")
-    u = cursor.fetchone()[0]
-
-    cursor.execute("SELECT SUM(messages_count) FROM users")
-    msg = cursor.fetchone()[0] or 0
-
-    cursor.execute("SELECT COUNT(*) FROM users WHERE banned=1")
-    b = cursor.fetchone()[0]
-
-    return u, msg, b
-
-
-@bot.callback_query_handler(func=lambda c: c.data == "stats")
-def st(c):
-    u, m, b = stats()
-
-    bot.send_message(c.message.chat.id,
-        f"📊 СТАТИСТИКА\n\n👥 {u}\n💬 {m}\n🚫 {b}"
-    )
+    bot.send_message(m.chat.id, "🔧 Админ режим активен")
 
 # ======================
-# 👥 USERS
+# 🧠 SAFE LOOP
 # ======================
 
-@bot.callback_query_handler(func=lambda c: c.data == "users")
-def us(c):
-    cursor.execute("""
-        SELECT id, username, messages_count
-        FROM users
-        ORDER BY messages_count DESC
-        LIMIT 10
-    """)
-
-    data = cursor.fetchall()
-
-    text = "👥 TOP:\n\n"
-    for u in data:
-        text += f"{u[0]} | @{u[1]} | 💬 {u[2]}\n"
-
-    bot.send_message(c.message.chat.id, text)
-
-# ======================
-# 🚫 BAN
-# ======================
-
-@bot.callback_query_handler(func=lambda c: c.data == "ban")
-def ban(c):
-    msg = bot.send_message(c.message.chat.id, "ID для бана:")
-    bot.register_next_step_handler(msg, do_ban)
-
-
-def do_ban(m):
-    try:
-        uid = int(m.text)
-
-        cursor.execute("UPDATE users SET banned=1 WHERE id=?", (uid,))
-        conn.commit()
-
-        bot.send_message(m.chat.id, f"🚫 Забанен {uid}")
-
-    except:
-        bot.send_message(m.chat.id, "❌ Ошибка")
-
-# ======================
-# 📢 BROADCAST
-# ======================
-
-@bot.callback_query_handler(func=lambda c: c.data == "broadcast")
-def bc(c):
-    msg = bot.send_message(c.message.chat.id, "Текст:")
-    bot.register_next_step_handler(msg, send_bc)
-
-
-def send_bc(m):
-    text = m.text
-
-    cursor.execute("SELECT id FROM users WHERE banned=0")
-    users = cursor.fetchall()
-
-    sent = 0
-
-    for u in users:
-        try:
-            bot.send_message(u[0], f"📢 {text}")
-            sent += 1
-        except:
-            pass
-
-    bot.send_message(m.chat.id, f"✅ Отправлено {sent}")
-
-# ======================
-# 🛡 SAFE START (RAILWAY FIX)
-# ======================
-
-print("Bot started...")
+print("🤖 Bot is alive...")
 
 while True:
     try:
