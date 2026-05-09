@@ -1,1 +1,1 @@
-worker: python tracker_bot_v_2.py
+web: python tracker_bot_v_2.py
