@@ -9,7 +9,7 @@ import time
 # 🔐 CONFIG
 # ======================
 
-TOKEN = "8696665559:AAFj5mQtQh2b3nAiaq5q3EUPDqqXNDaBXmY"
+TOKEN = "8696665559:AAHoFXlywG_YNpDBE68ePeoiH-n8lsnBD_4"
 ADMIN_IDS = [1427099343]
 
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
