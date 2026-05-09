@@ -1,4 +1,4 @@
 pytelegrambotapi
 apscheduler
 python-dotenv
-pyTelegramBotAPI
+pyTelegramBotAPI==4.27.0
