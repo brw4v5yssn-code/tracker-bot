@@ -3,18 +3,19 @@ from telebot import types
 import sqlite3
 from datetime import datetime
 import os
+import time
 
 # ======================
-# 🔐 НАСТРОЙКИ
+# 🔐 CONFIG
 # ======================
 
 TOKEN = "8696665559:AAFj5mQtQh2b3nAiaq5q3EUPDqqXNDaBXmY"
-ADMIN_IDS = [1427099343]  # <-- свой Telegram ID
+ADMIN_IDS = [1427099343]
 
-bot = telebot.TeleBot(TOKEN)
+bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 
 # ======================
-# 📦 БАЗА ДАННЫХ
+# 📦 DB (STABLE MODE)
 # ======================
 
 conn = sqlite3.connect("bot.db", check_same_thread=False)
@@ -29,126 +30,141 @@ CREATE TABLE IF NOT EXISTS users (
     banned INTEGER DEFAULT 0
 )
 """)
-
 conn.commit()
 
 # ======================
-# 🧠 ЛОГИКА
+# 🧠 CACHE (ANTI SPAM)
 # ======================
 
-def is_admin(user_id):
-    return user_id in ADMIN_IDS
+last_msg_time = {}
 
+def anti_spam(user_id):
+    now = time.time()
+    if user_id in last_msg_time:
+        if now - last_msg_time[user_id] < 0.3:
+            return True
+    last_msg_time[user_id] = now
+    return False
 
-def is_banned(user_id):
-    cursor.execute("SELECT banned FROM users WHERE id=?", (user_id,))
-    result = cursor.fetchone()
-    return result and result[0] == 1
+# ======================
+# 🔐 HELPERS
+# ======================
 
+def is_admin(uid):
+    return uid in ADMIN_IDS
 
-def add_user(user_id, username):
-    cursor.execute("SELECT id FROM users WHERE id=?", (user_id,))
-    if cursor.fetchone() is None:
+def is_banned(uid):
+    cursor.execute("SELECT banned FROM users WHERE id=?", (uid,))
+    r = cursor.fetchone()
+    return r and r[0] == 1
+
+def add_user(uid, username):
+    cursor.execute("SELECT id FROM users WHERE id=?", (uid,))
+    if not cursor.fetchone():
         cursor.execute(
             "INSERT INTO users (id, username, first_seen) VALUES (?, ?, ?)",
-            (user_id, username, datetime.now().strftime("%Y-%m-%d %H:%M"))
+            (uid, username, datetime.now().strftime("%Y-%m-%d %H:%M"))
         )
         conn.commit()
 
-
-def increase_messages(user_id):
+def inc_msg(uid):
     cursor.execute(
         "UPDATE users SET messages_count = messages_count + 1 WHERE id=?",
-        (user_id,)
+        (uid,)
     )
     conn.commit()
 
 # ======================
-# 🧩 АДМИН ПАНЕЛЬ
+# 🔧 ADMIN PANEL
 # ======================
 
-def admin_menu():
-    markup = types.InlineKeyboardMarkup(row_width=2)
+def menu():
+    kb = types.InlineKeyboardMarkup(row_width=2)
 
-    markup.add(
-        types.InlineKeyboardButton("📊 Статистика", callback_data="stats"),
-        types.InlineKeyboardButton("👥 Пользователи", callback_data="users")
+    kb.add(
+        types.InlineKeyboardButton("📊 Стата", callback_data="stats"),
+        types.InlineKeyboardButton("👥 Юзеры", callback_data="users")
     )
 
-    markup.add(
+    kb.add(
         types.InlineKeyboardButton("🚫 Бан", callback_data="ban"),
         types.InlineKeyboardButton("📢 Рассылка", callback_data="broadcast")
     )
 
-    return markup
+    return kb
 
 # ======================
 # 🚀 START
 # ======================
 
 @bot.message_handler(commands=['start'])
-def start(message):
-    if is_banned(message.from_user.id):
+def start(m):
+    if anti_spam(m.from_user.id):
         return
 
-    add_user(message.from_user.id, message.from_user.username)
+    if is_banned(m.from_user.id):
+        return
 
-    bot.send_message(message.chat.id, "👋 Бот работает!")
+    add_user(m.from_user.id, m.from_user.username)
+    bot.send_message(m.chat.id, "👋 Бот работает")
 
 # ======================
-# 📩 ВСЕ СООБЩЕНИЯ
+# 📩 ALL MSGS
 # ======================
 
 @bot.message_handler(func=lambda m: True)
-def all_messages(message):
-    if is_banned(message.from_user.id):
+def all(m):
+    if anti_spam(m.from_user.id):
         return
 
-    add_user(message.from_user.id, message.from_user.username)
-    increase_messages(message.from_user.id)
+    if is_banned(m.from_user.id):
+        return
+
+    add_user(m.from_user.id, m.from_user.username)
+    inc_msg(m.from_user.id)
 
 # ======================
-# 🔧 АДМИНКА
+# 🔧 ADMIN
 # ======================
 
 @bot.message_handler(commands=['admin'])
-def admin_panel(message):
-    if not is_admin(message.from_user.id):
-        return bot.send_message(message.chat.id, "⛔ Нет доступа")
+def admin(m):
+    if not is_admin(m.from_user.id):
+        return bot.send_message(m.chat.id, "⛔ Нет доступа")
 
-    bot.send_message(message.chat.id, "🔧 Админ-панель:", reply_markup=admin_menu())
+    bot.send_message(m.chat.id, "🔧 Админка", reply_markup=menu())
 
 # ======================
-# 📊 СТАТИСТИКА
+# 📊 STATS
 # ======================
 
-def get_stats():
+def stats():
     cursor.execute("SELECT COUNT(*) FROM users")
-    users = cursor.fetchone()[0]
+    u = cursor.fetchone()[0]
 
     cursor.execute("SELECT SUM(messages_count) FROM users")
-    messages = cursor.fetchone()[0] or 0
+    msg = cursor.fetchone()[0] or 0
 
     cursor.execute("SELECT COUNT(*) FROM users WHERE banned=1")
-    banned = cursor.fetchone()[0]
+    b = cursor.fetchone()[0]
 
-    return users, messages, banned
+    return u, msg, b
 
 
-@bot.callback_query_handler(func=lambda call: call.data == "stats")
-def stats(call):
-    users, messages, banned = get_stats()
+@bot.callback_query_handler(func=lambda c: c.data == "stats")
+def st(c):
+    u, m, b = stats()
 
-    bot.send_message(call.message.chat.id,
-        f"📊 СТАТИСТИКА\n\n👥 {users}\n💬 {messages}\n🚫 {banned}"
+    bot.send_message(c.message.chat.id,
+        f"📊 СТАТИСТИКА\n\n👥 {u}\n💬 {m}\n🚫 {b}"
     )
 
 # ======================
-# 👥 ПОЛЬЗОВАТЕЛИ
+# 👥 USERS
 # ======================
 
-@bot.callback_query_handler(func=lambda call: call.data == "users")
-def users(call):
+@bot.callback_query_handler(func=lambda c: c.data == "users")
+def us(c):
     cursor.execute("""
         SELECT id, username, messages_count
         FROM users
@@ -158,47 +174,46 @@ def users(call):
 
     data = cursor.fetchall()
 
-    text = "👥 ТОП:\n\n"
-
+    text = "👥 TOP:\n\n"
     for u in data:
         text += f"{u[0]} | @{u[1]} | 💬 {u[2]}\n"
 
-    bot.send_message(call.message.chat.id, text)
+    bot.send_message(c.message.chat.id, text)
 
 # ======================
-# 🚫 БАН
+# 🚫 BAN
 # ======================
 
-@bot.callback_query_handler(func=lambda call: call.data == "ban")
-def ban_menu(call):
-    msg = bot.send_message(call.message.chat.id, "ID для бана:")
+@bot.callback_query_handler(func=lambda c: c.data == "ban")
+def ban(c):
+    msg = bot.send_message(c.message.chat.id, "ID для бана:")
     bot.register_next_step_handler(msg, do_ban)
 
 
-def do_ban(message):
+def do_ban(m):
     try:
-        user_id = int(message.text)
+        uid = int(m.text)
 
-        cursor.execute("UPDATE users SET banned=1 WHERE id=?", (user_id,))
+        cursor.execute("UPDATE users SET banned=1 WHERE id=?", (uid,))
         conn.commit()
 
-        bot.send_message(message.chat.id, f"🚫 Забанен {user_id}")
+        bot.send_message(m.chat.id, f"🚫 Забанен {uid}")
 
     except:
-        bot.send_message(message.chat.id, "❌ Ошибка")
+        bot.send_message(m.chat.id, "❌ Ошибка")
 
 # ======================
-# 📢 РАССЫЛКА
+# 📢 BROADCAST
 # ======================
 
-@bot.callback_query_handler(func=lambda call: call.data == "broadcast")
-def broadcast(call):
-    msg = bot.send_message(call.message.chat.id, "Текст рассылки:")
-    bot.register_next_step_handler(msg, send_broadcast)
+@bot.callback_query_handler(func=lambda c: c.data == "broadcast")
+def bc(c):
+    msg = bot.send_message(c.message.chat.id, "Текст:")
+    bot.register_next_step_handler(msg, send_bc)
 
 
-def send_broadcast(message):
-    text = message.text
+def send_bc(m):
+    text = m.text
 
     cursor.execute("SELECT id FROM users WHERE banned=0")
     users = cursor.fetchall()
@@ -212,12 +227,17 @@ def send_broadcast(message):
         except:
             pass
 
-    bot.send_message(message.chat.id, f"✅ Отправлено: {sent}")
+    bot.send_message(m.chat.id, f"✅ Отправлено {sent}")
 
 # ======================
-# ▶️ ЗАПУСК (ЧИСТЫЙ)
+# 🛡 SAFE START (RAILWAY FIX)
 # ======================
 
 print("Bot started...")
 
-bot.infinity_polling()
+while True:
+    try:
+        bot.infinity_polling(timeout=30, long_polling_timeout=30)
+    except Exception as e:
+        print("ERROR:", e)
+        time.sleep(3)
