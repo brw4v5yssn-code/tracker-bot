@@ -1,22 +1,22 @@
 import telebot
 from telebot import types
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime
 import threading
 import time
 
-# =========================================
-# 🔐 CONFIG
-# =========================================
+# =========================
+# CONFIG
+# =========================
 
 TOKEN = "8696665559:AAHoFXlywG_YNpDBE68ePeoiH-n8lsnBD_4"
-ADMIN_IDS = [987654321]
+ADMIN_IDS = [1427099343]
 
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 
-# =========================================
-# 📦 DATABASE
-# =========================================
+# =========================
+# DATABASE
+# =========================
 
 conn = sqlite3.connect("calendar.db", check_same_thread=False)
 cursor = conn.cursor()
@@ -24,8 +24,7 @@ cursor = conn.cursor()
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
-    username TEXT,
-    joined TEXT
+    username TEXT
 )
 """)
 
@@ -41,87 +40,92 @@ CREATE TABLE IF NOT EXISTS events (
 
 conn.commit()
 
-# =========================================
-# 🧠 HELPERS
-# =========================================
+# =========================
+# HELPERS
+# =========================
 
 def add_user(user):
     cursor.execute(
-        "INSERT OR IGNORE INTO users VALUES (?, ?, ?)",
-        (
-            user.id,
-            user.username,
-            datetime.now().strftime("%Y-%m-%d %H:%M")
-        )
+        "INSERT OR IGNORE INTO users VALUES (?, ?)",
+        (user.id, user.username)
     )
     conn.commit()
-
 
 def is_admin(user_id):
     return user_id in ADMIN_IDS
 
+# =========================
+# MENUS
+# =========================
 
 def main_menu():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
 
-    kb.row("➕ Добавить", "📅 Мои события")
+    kb.row("➕ Добавить", "📅 События")
     kb.row("🗑 Удалить", "ℹ️ Помощь")
 
     return kb
 
-# =========================================
-# 🚀 START
-# =========================================
+def admin_menu():
+    kb = types.InlineKeyboardMarkup()
+
+    kb.add(
+        types.InlineKeyboardButton(
+            "📊 Статистика",
+            callback_data="stats"
+        )
+    )
+
+    return kb
+
+# =========================
+# START
+# =========================
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    add_user(message.from_user)
 
-    text = (
-        "📅 <b>Calendar PRO</b>\n\n"
-        "Я помогу хранить события и напоминания.\n\n"
-        "Выбери действие 👇"
-    )
+    add_user(message.from_user)
 
     bot.send_message(
         message.chat.id,
-        text,
+        "📅 <b>Calendar Bot</b>\n\nВыбери действие 👇",
         reply_markup=main_menu()
     )
 
-# =========================================
-# ➕ ADD EVENT
-# =========================================
+# =========================
+# ADD EVENT
+# =========================
 
 @bot.message_handler(func=lambda m: m.text == "➕ Добавить")
 def add_event(message):
+
     msg = bot.send_message(
         message.chat.id,
         "✍️ Введи событие:\n\n"
-        "<code>Текст | YYYY-MM-DD HH:MM</code>\n\n"
         "Пример:\n"
-        "<code>Встреча | 2026-05-10 18:00</code>"
+        "<code>Тренировка | 2026-05-10 18:00</code>"
     )
 
     bot.register_next_step_handler(msg, save_event)
 
-
 def save_event(message):
+
     try:
         data = message.text.split("|")
 
         title = data[0].strip()
         event_time = data[1].strip()
 
-        # проверка даты
-        dt = datetime.strptime(event_time, "%Y-%m-%d %H:%M")
+        datetime.strptime(event_time, "%Y-%m-%d %H:%M")
 
         cursor.execute("""
             INSERT INTO events (
                 user_id,
                 title,
                 event_time
-            ) VALUES (?, ?, ?)
+            )
+            VALUES (?, ?, ?)
         """, (
             message.from_user.id,
             title,
@@ -132,25 +136,21 @@ def save_event(message):
 
         bot.send_message(
             message.chat.id,
-            f"✅ Событие добавлено\n\n"
-            f"📌 {title}\n"
-            f"⏰ {event_time}"
+            f"✅ Добавлено\n\n📌 {title}\n⏰ {event_time}"
         )
 
-    except Exception as e:
+    except:
         bot.send_message(
             message.chat.id,
-            "❌ Ошибка формата\n\n"
-            "Пример:\n"
-            "<code>Тренировка | 2026-05-10 18:00</code>"
+            "❌ Неверный формат"
         )
 
-# =========================================
-# 📅 MY EVENTS
-# =========================================
+# =========================
+# EVENTS
+# =========================
 
-@bot.message_handler(func=lambda m: m.text == "📅 Мои события")
-def my_events(message):
+@bot.message_handler(func=lambda m: m.text == "📅 События")
+def events(message):
 
     cursor.execute("""
         SELECT id, title, event_time
@@ -159,28 +159,28 @@ def my_events(message):
         ORDER BY event_time
     """, (message.from_user.id,))
 
-    events = cursor.fetchall()
+    data = cursor.fetchall()
 
-    if not events:
+    if not data:
         return bot.send_message(
             message.chat.id,
-            "📭 У тебя нет событий"
+            "📭 Событий нет"
         )
 
     text = "📅 <b>Твои события:</b>\n\n"
 
-    for event in events:
+    for e in data:
         text += (
-            f"🆔 {event[0]}\n"
-            f"📌 {event[1]}\n"
-            f"⏰ {event[2]}\n\n"
+            f"🆔 {e[0]}\n"
+            f"📌 {e[1]}\n"
+            f"⏰ {e[2]}\n\n"
         )
 
     bot.send_message(message.chat.id, text)
 
-# =========================================
-# 🗑 DELETE EVENT
-# =========================================
+# =========================
+# DELETE
+# =========================
 
 @bot.message_handler(func=lambda m: m.text == "🗑 Удалить")
 def delete_event(message):
@@ -191,7 +191,6 @@ def delete_event(message):
     )
 
     bot.register_next_step_handler(msg, process_delete)
-
 
 def process_delete(message):
 
@@ -210,7 +209,7 @@ def process_delete(message):
 
         bot.send_message(
             message.chat.id,
-            f"✅ Событие {event_id} удалено"
+            "✅ Удалено"
         )
 
     except:
@@ -219,26 +218,21 @@ def process_delete(message):
             "❌ Ошибка"
         )
 
-# =========================================
-# ℹ️ HELP
-# =========================================
+# =========================
+# HELP
+# =========================
 
 @bot.message_handler(func=lambda m: m.text == "ℹ️ Помощь")
 def help_cmd(message):
 
-    text = (
-        "📖 <b>Помощь</b>\n\n"
-        "➕ Добавить событие\n"
-        "📅 Посмотреть список\n"
-        "🗑 Удалить событие\n\n"
-        "Бот автоматически пришлёт напоминание ⏰"
+    bot.send_message(
+        message.chat.id,
+        "📖 Это бот-календарь с напоминаниями"
     )
 
-    bot.send_message(message.chat.id, text)
-
-# =========================================
-# 🔧 ADMIN PANEL
-# =========================================
+# =========================
+# ADMIN
+# =========================
 
 @bot.message_handler(commands=['admin'])
 def admin(message):
@@ -246,23 +240,29 @@ def admin(message):
     if not is_admin(message.from_user.id):
         return
 
+    bot.send_message(
+        message.chat.id,
+        "🔧 Админ-панель",
+        reply_markup=admin_menu()
+    )
+
+@bot.callback_query_handler(func=lambda c: c.data == "stats")
+def stats(call):
+
     cursor.execute("SELECT COUNT(*) FROM users")
     users = cursor.fetchone()[0]
 
     cursor.execute("SELECT COUNT(*) FROM events")
     events = cursor.fetchone()[0]
 
-    text = (
-        "🔧 <b>ADMIN PANEL</b>\n\n"
-        f"👥 Пользователей: {users}\n"
-        f"📅 Событий: {events}"
+    bot.send_message(
+        call.message.chat.id,
+        f"📊 Статистика\n\n👥 Пользователей: {users}\n📅 Событий: {events}"
     )
 
-    bot.send_message(message.chat.id, text)
-
-# =========================================
-# ⏰ REMINDER LOOP
-# =========================================
+# =========================
+# REMINDERS
+# =========================
 
 def reminder_loop():
 
@@ -278,41 +278,37 @@ def reminder_loop():
 
         events = cursor.fetchall()
 
-        for event in events:
+        for e in events:
 
             try:
                 bot.send_message(
-                    event[1],
-                    f"⏰ <b>НАПОМИНАНИЕ</b>\n\n📌 {event[2]}"
+                    e[1],
+                    f"⏰ Напоминание\n\n📌 {e[2]}"
                 )
 
                 cursor.execute("""
                     UPDATE events
                     SET notified=1
                     WHERE id=?
-                """, (event[0],))
+                """, (e[0],))
 
                 conn.commit()
 
-            except Exception as e:
-                print(e)
+            except:
+                pass
 
         time.sleep(20)
-
-# =========================================
-# 🚀 START THREAD
-# =========================================
 
 threading.Thread(
     target=reminder_loop,
     daemon=True
 ).start()
 
-# =========================================
-# ▶️ RUN
-# =========================================
+# =========================
+# RUN
+# =========================
 
-print("📅 Calendar PRO started...")
+print("Calendar bot started")
 
 while True:
     try:
@@ -322,5 +318,5 @@ while True:
         )
 
     except Exception as e:
-        print("ERROR:", e)
+        print(e)
         time.sleep(5)
