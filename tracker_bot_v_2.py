@@ -10,7 +10,7 @@ import time
 # =========================================
 
 TOKEN = "8696665559:AAHoFXlywG_YNpDBE68ePeoiH-n8lsnBD_4"
-ADMIN_IDS = [ADMIN_IDS = [987654321]]
+ADMIN_IDS = [987654321]
 
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 
