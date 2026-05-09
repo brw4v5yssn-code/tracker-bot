@@ -224,7 +224,8 @@ def do_broadcast(message):
 # ======================
 
 print("Bot started...")
-bot.infinity_polling()import os
+import os
+bot.infinity_polling()
 import sqlite3
 from datetime import datetime, timedelta
 from telebot import TeleBot, types
