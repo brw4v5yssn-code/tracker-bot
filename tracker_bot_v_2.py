@@ -1,322 +1,178 @@
-import telebot
-from telebot import types
+import os
 import sqlite3
-from datetime import datetime
-import threading
-import time
+from datetime import datetime, timedelta
+from telebot import TeleBot, types
+from apscheduler.schedulers.background import BackgroundScheduler
+from dotenv import load_dotenv
 
-# =========================
-# CONFIG
-# =========================
+load_dotenv()
+TOKEN = os.getenv('BOT_TOKEN')
+if not TOKEN:
+    print('ERROR: BOT_TOKEN not found. Create .env file with BOT_TOKEN=your_token')
+    raise SystemExit(1)
+bot = TeleBot(TOKEN, parse_mode='HTML')
+DB='tracker_v2.db'
 
-TOKEN = "8696665559:AAHoFXlywG_YNpDBE68ePeoiH-n8lsnBD_4"
-ADMIN_IDS = [1427099343]
+# ---------- DB ----------
+def conn():
+    return sqlite3.connect(DB)
 
-bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
+def init_db():
+    with conn() as c:
+        cur=c.cursor()
+        cur.execute('CREATE TABLE IF NOT EXISTS users(user_id INTEGER PRIMARY KEY,name TEXT,goal REAL DEFAULT 8,last_project TEXT)')
+        cur.execute('CREATE TABLE IF NOT EXISTS logs(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER,date TEXT,project TEXT,hours REAL)')
+init_db()
 
-# =========================
-# DATABASE
-# =========================
+state={}
+temp={}
 
-conn = sqlite3.connect("calendar.db", check_same_thread=False)
-cursor = conn.cursor()
+def today(): return datetime.now().strftime('%Y-%m-%d')
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    user_id INTEGER PRIMARY KEY,
-    username TEXT
-)
-""")
+def menu():
+    m=types.ReplyKeyboardMarkup(resize_keyboard=True)
+    m.row('➕ Добавить','📊 Сегодня')
+    m.row('📆 Неделя','🎯 Цель')
+    m.row('🔥 Streak','📁 Проекты')
+    return m
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    title TEXT,
-    event_time TEXT,
-    notified INTEGER DEFAULT 0
-)
-""")
+def projects():
+    m=types.ReplyKeyboardMarkup(resize_keyboard=True)
+    m.row('🐍 Python','💼 Work','📚 Study')
+    m.row('🧠 Gym','💰 Freelance')
+    m.row('🔙 Назад')
+    return m
 
-conn.commit()
-
-# =========================
-# HELPERS
-# =========================
-
-def add_user(user):
-    cursor.execute(
-        "INSERT OR IGNORE INTO users VALUES (?, ?)",
-        (user.id, user.username)
-    )
-    conn.commit()
-
-def is_admin(user_id):
-    return user_id in ADMIN_IDS
-
-# =========================
-# MENUS
-# =========================
-
-def main_menu():
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-
-    kb.row("➕ Добавить", "📅 События")
-    kb.row("🗑 Удалить", "ℹ️ Помощь")
-
-    return kb
-
-def admin_menu():
-    kb = types.InlineKeyboardMarkup()
-
-    kb.add(
-        types.InlineKeyboardButton(
-            "📊 Статистика",
-            callback_data="stats"
-        )
-    )
-
-    return kb
-
-# =========================
-# START
-# =========================
+def hours_kb():
+    m=types.ReplyKeyboardMarkup(resize_keyboard=True)
+    m.row('1','2','3','4')
+    m.row('5','6','7','8')
+    m.row('🔙 Назад')
+    return m
 
 @bot.message_handler(commands=['start'])
-def start(message):
+def start(msg):
+    uid=msg.chat.id
+    with conn() as c:
+        c.execute('INSERT OR IGNORE INTO users(user_id,name) VALUES(?,?)',(uid,msg.from_user.first_name))
+    bot.send_message(uid,'🚀 Tracker V2 запущен',reply_markup=menu())
 
-    add_user(message.from_user)
+@bot.message_handler(func=lambda m: True)
+def handler(msg):
+    uid=msg.chat.id
+    text=msg.text.strip()
 
-    bot.send_message(
-        message.chat.id,
-        "📅 <b>Calendar Bot</b>\n\nВыбери действие 👇",
-        reply_markup=main_menu()
-    )
-
-# =========================
-# ADD EVENT
-# =========================
-
-@bot.message_handler(func=lambda m: m.text == "➕ Добавить")
-def add_event(message):
-
-    msg = bot.send_message(
-        message.chat.id,
-        "✍️ Введи событие:\n\n"
-        "Пример:\n"
-        "<code>Тренировка | 2026-05-10 18:00</code>"
-    )
-
-    bot.register_next_step_handler(msg, save_event)
-
-def save_event(message):
-
-    try:
-        data = message.text.split("|")
-
-        title = data[0].strip()
-        event_time = data[1].strip()
-
-        datetime.strptime(event_time, "%Y-%m-%d %H:%M")
-
-        cursor.execute("""
-            INSERT INTO events (
-                user_id,
-                title,
-                event_time
-            )
-            VALUES (?, ?, ?)
-        """, (
-            message.from_user.id,
-            title,
-            event_time
-        ))
-
-        conn.commit()
-
-        bot.send_message(
-            message.chat.id,
-            f"✅ Добавлено\n\n📌 {title}\n⏰ {event_time}"
-        )
-
-    except:
-        bot.send_message(
-            message.chat.id,
-            "❌ Неверный формат"
-        )
-
-# =========================
-# EVENTS
-# =========================
-
-@bot.message_handler(func=lambda m: m.text == "📅 События")
-def events(message):
-
-    cursor.execute("""
-        SELECT id, title, event_time
-        FROM events
-        WHERE user_id=?
-        ORDER BY event_time
-    """, (message.from_user.id,))
-
-    data = cursor.fetchall()
-
-    if not data:
-        return bot.send_message(
-            message.chat.id,
-            "📭 Событий нет"
-        )
-
-    text = "📅 <b>Твои события:</b>\n\n"
-
-    for e in data:
-        text += (
-            f"🆔 {e[0]}\n"
-            f"📌 {e[1]}\n"
-            f"⏰ {e[2]}\n\n"
-        )
-
-    bot.send_message(message.chat.id, text)
-
-# =========================
-# DELETE
-# =========================
-
-@bot.message_handler(func=lambda m: m.text == "🗑 Удалить")
-def delete_event(message):
-
-    msg = bot.send_message(
-        message.chat.id,
-        "🗑 Введи ID события"
-    )
-
-    bot.register_next_step_handler(msg, process_delete)
-
-def process_delete(message):
-
-    try:
-        event_id = int(message.text)
-
-        cursor.execute("""
-            DELETE FROM events
-            WHERE id=? AND user_id=?
-        """, (
-            event_id,
-            message.from_user.id
-        ))
-
-        conn.commit()
-
-        bot.send_message(
-            message.chat.id,
-            "✅ Удалено"
-        )
-
-    except:
-        bot.send_message(
-            message.chat.id,
-            "❌ Ошибка"
-        )
-
-# =========================
-# HELP
-# =========================
-
-@bot.message_handler(func=lambda m: m.text == "ℹ️ Помощь")
-def help_cmd(message):
-
-    bot.send_message(
-        message.chat.id,
-        "📖 Это бот-календарь с напоминаниями"
-    )
-
-# =========================
-# ADMIN
-# =========================
-
-@bot.message_handler(commands=['admin'])
-def admin(message):
-
-    if not is_admin(message.from_user.id):
+    if text.startswith('+'):
+        quick_add(uid,text)
         return
 
-    bot.send_message(
-        message.chat.id,
-        "🔧 Админ-панель",
-        reply_markup=admin_menu()
-    )
+    if uid in state:
+        flow(uid,text)
+        return
 
-@bot.callback_query_handler(func=lambda c: c.data == "stats")
-def stats(call):
+    if text=='➕ Добавить':
+        state[uid]='project'
+        bot.send_message(uid,'Выбери проект',reply_markup=projects())
+    elif text=='📊 Сегодня':
+        report_today(uid)
+    elif text=='📆 Неделя':
+        report_week(uid)
+    elif text=='🔥 Streak':
+        bot.send_message(uid,f'🔥 Серия: {streak(uid)} дней')
+    elif text=='🎯 Цель':
+        state[uid]='goal'
+        bot.send_message(uid,'Введи дневную цель в часах (например 6)')
+    elif text=='📁 Проекты':
+        project_stats(uid)
+    else:
+        bot.send_message(uid,'Используй меню 👇',reply_markup=menu())
 
-    cursor.execute("SELECT COUNT(*) FROM users")
-    users = cursor.fetchone()[0]
+def flow(uid,text):
+    step=state[uid]
+    if step=='project':
+        if text=='🔙 Назад':
+            state.pop(uid,None); bot.send_message(uid,'Меню',reply_markup=menu()); return
+        temp[uid]={'project':text}
+        state[uid]='hours'
+        bot.send_message(uid,'Сколько часов?',reply_markup=hours_kb())
+    elif step=='hours':
+        try:
+            h=float(text.replace(',','.'))
+            if h<=0 or h>24: raise ValueError()
+            p=temp[uid]['project']
+            save_log(uid,p,h)
+            bot.send_message(uid,f'✅ {h}ч [{p}]',reply_markup=menu())
+        except:
+            bot.send_message(uid,'Введите число от 0 до 24')
+        state.pop(uid,None); temp.pop(uid,None)
+    elif step=='goal':
+        try:
+            g=float(text.replace(',','.'))
+            with conn() as c:
+                c.execute('UPDATE users SET goal=? WHERE user_id=?',(g,uid))
+            bot.send_message(uid,f'🎯 Цель сохранена: {g}ч',reply_markup=menu())
+        except:
+            bot.send_message(uid,'Ошибка ввода',reply_markup=menu())
+        state.pop(uid,None)
 
-    cursor.execute("SELECT COUNT(*) FROM events")
-    events = cursor.fetchone()[0]
+def save_log(uid,p,h):
+    with conn() as c:
+        c.execute('INSERT INTO logs(user_id,date,project,hours) VALUES(?,?,?,?)',(uid,today(),p,h))
+        c.execute('UPDATE users SET last_project=? WHERE user_id=?',(p,uid))
 
-    bot.send_message(
-        call.message.chat.id,
-        f"📊 Статистика\n\n👥 Пользователей: {users}\n📅 Событий: {events}"
-    )
-
-# =========================
-# REMINDERS
-# =========================
-
-def reminder_loop():
-
-    while True:
-
-        now = datetime.now().strftime("%Y-%m-%d %H:%M")
-
-        cursor.execute("""
-            SELECT id, user_id, title
-            FROM events
-            WHERE event_time=? AND notified=0
-        """, (now,))
-
-        events = cursor.fetchall()
-
-        for e in events:
-
-            try:
-                bot.send_message(
-                    e[1],
-                    f"⏰ Напоминание\n\n📌 {e[2]}"
-                )
-
-                cursor.execute("""
-                    UPDATE events
-                    SET notified=1
-                    WHERE id=?
-                """, (e[0],))
-
-                conn.commit()
-
-            except:
-                pass
-
-        time.sleep(20)
-
-threading.Thread(
-    target=reminder_loop,
-    daemon=True
-).start()
-
-# =========================
-# RUN
-# =========================
-
-print("Calendar bot started")
-
-while True:
+def quick_add(uid,text):
     try:
-        bot.infinity_polling(
-            timeout=30,
-            long_polling_timeout=30
-        )
+        arr=text[1:].split()
+        h=float(arr[0]); p=arr[1] if len(arr)>1 else 'Work'
+        save_log(uid,p,h)
+        bot.send_message(uid,f'⚡ Добавлено {h}ч [{p}]')
+    except:
+        bot.send_message(uid,'Формат: +2 Work')
 
-    except Exception as e:
-        print(e)
-        time.sleep(5)
+def report_today(uid):
+    with conn() as c:
+        val=c.execute('SELECT COALESCE(SUM(hours),0) FROM logs WHERE user_id=? AND date=?',(uid,today())).fetchone()[0]
+        goal=c.execute('SELECT goal FROM users WHERE user_id=?',(uid,)).fetchone()[0]
+    pct=min(100,int(val/goal*100)) if goal else 0
+    bot.send_message(uid,f'📊 Сегодня: {val:.1f}ч / {goal:.1f}ч ({pct}%)')
+
+def report_week(uid):
+    since=(datetime.now()-timedelta(days=7)).strftime('%Y-%m-%d')
+    with conn() as c:
+        rows=c.execute('SELECT COALESCE(SUM(hours),0) FROM logs WHERE user_id=? AND date>=?',(uid,since)).fetchone()[0]
+    bot.send_message(uid,f'📆 За 7 дней: {rows:.1f}ч')
+
+def streak(uid):
+    with conn() as c:
+        dates=[r[0] for r in c.execute('SELECT DISTINCT date FROM logs WHERE user_id=? ORDER BY date DESC',(uid,)).fetchall()]
+    cur=datetime.now(); s=0
+    for d in dates:
+        if d==cur.strftime('%Y-%m-%d'):
+            s+=1; cur-=timedelta(days=1)
+        else:
+            break
+    return s
+
+def project_stats(uid):
+    with conn() as c:
+        rows=c.execute('SELECT project,SUM(hours) FROM logs WHERE user_id=? GROUP BY project ORDER BY SUM(hours) DESC',(uid,)).fetchall()
+    if not rows:
+        bot.send_message(uid,'Нет данных'); return
+    txt='📁 Проекты:\n'+'\n'.join([f'{p}: {h:.1f}ч' for p,h in rows])
+    bot.send_message(uid,txt)
+
+def daily_push():
+    with conn() as c:
+        users=c.execute('SELECT user_id FROM users').fetchall()
+    for (uid,) in users:
+        try:
+            report_today(uid)
+        except:
+            pass
+
+scheduler=BackgroundScheduler()
+scheduler.add_job(daily_push,'cron',hour=23,minute=0)
+scheduler.start()
+
+print('Bot started successfully. Press Ctrl+C to stop.')
+bot.infinity_polling()
