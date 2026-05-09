@@ -1,2 +1,2 @@
-[build]
+[deploy]
 start = "python tracker_bot_v_2.py"
